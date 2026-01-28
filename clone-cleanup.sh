@@ -1,76 +1,94 @@
-#!/bin/bash
-# --- START: Universal Clone Cleanup (SLES/RHEL/Debian/Ubuntu) ---
-echo "INFO: Starting Clone Cleanup for SUSE Manager / Multi-Linux Manager Registration..."
+# --- START: Advanced Clone Cleanup & Prep ---
+# Merges SUSE Manager 5.0 requirements with best-practice clone hygiene
 
-# 0. Safety Check: Ensure we are running on a systemd system
-if [ ! -d /run/systemd/system ]; then
-    echo "ERROR: This cleanup script requires systemd. Skipping ID regeneration."
-else
-    # 1. Stop Salt Services to release file locks
-    # We stop both the bundle (venv) and classic service just in case
-    echo "INFO: Stopping Salt services..."
-    systemctl stop venv-salt-minion 2>/dev/null || true
-    systemctl stop salt-minion 2>/dev/null || true
+# --- 1. Visual Helpers ---
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
 
-    # 2. Identify Distribution Family (for logging/debugging purposes)
-    if [ -f /etc/os-release ]; then
-        . /etc/os-release
-        OS_FAMILY=$ID
-        echo "INFO: Detected OS: $NAME ($OS_FAMILY)"
-    fi
+log_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
+log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
+log_err()  { echo -e "${RED}[ERR]${NC}  $1"; }
 
-    # 3. Regenerate System Machine ID
-    # This logic works for SLES, RHEL, CentOS, Rocky, Oracle, Debian, and Ubuntu
-    echo "INFO: Regenerating System Machine ID..."
-    
-    # Remove existing IDs
-    rm -f /etc/machine-id
-    rm -f /var/lib/dbus/machine-id
-    
-    # RHEL/SLES/CentOS usually need dbus-uuidgen first
-    if command -v dbus-uuidgen >/dev/null 2>&1; then
-        dbus-uuidgen --ensure
-    fi
-    
-    # Universal systemd generation
-    systemd-machine-id-setup
-    
-    # Debian/Ubuntu Specific Fix:
-    # Sometimes Debian/Ubuntu leaves /var/lib/dbus/machine-id empty or missing after setup.
-    # We allow the systemd ID to propagate to dbus if missing.
-    if [ ! -s /var/lib/dbus/machine-id ] && [ -s /etc/machine-id ]; then
-        mkdir -p /var/lib/dbus
-        ln -s /etc/machine-id /var/lib/dbus/machine-id
-        echo "INFO: Linked /etc/machine-id to /var/lib/dbus/machine-id (Debian/Ubuntu fix)"
-    fi
+log_info "Starting Pre-Bootstrap Clone Cleanup..."
 
-    # 4. Clean Salt Bundle Identity (Critical for SUSE Manager 5.0)
-    echo "INFO: Cleaning venv-salt-minion identity..."
-    rm -f /etc/venv-salt-minion/minion_id
-    rm -rf /etc/venv-salt-minion/pki/*
+# --- 2. Stop Services ---
+# We stop Salt to release locks. We do NOT stop SSH to avoid killing the bootstrap connection.
+log_info "Stopping Salt services..."
+systemctl stop venv-salt-minion 2>/dev/null || true
+systemctl stop salt-minion 2>/dev/null || true
 
-    # 5. Clean Legacy Salt Identity
-    echo "INFO: Cleaning legacy salt-minion identity..."
-    rm -f /etc/salt/minion_id
-    rm -rf /etc/salt/pki/*
-
-    # 6. Fix Journald
-    # Changing machine-id breaks logging until restart, this needs fixing
-    echo "INFO: Rotating systemd journal..."
-    if [ -d /var/log/journal ]; then
-        # We rename the folder so a new one is created with the new ID
-        mv /var/log/journal /var/log/journal.backup_$(date +%s)
-        mkdir -p /var/log/journal
-        systemd-tmpfiles --create --prefix /var/log/journal 2>/dev/null || true
-        systemctl restart systemd-journald
-    fi
-    
-    # 7. (Optional) SSH Host Keys
-    # Clones usually share SSH keys, which is a security risk. 
-    # Uncomment the following lines if you want to regenerate SSH keys too.
-    # rm -f /etc/ssh/ssh_host_*
-    # systemctl restart sshd 2>/dev/null || systemctl restart ssh 2>/dev/null
-    
-    echo "INFO: Identity regeneration complete. New Machine ID: $(cat /etc/machine-id)"
+# --- 3. Clean Random Seed (Entropy) ---
+# Borrowed from vzhestkov: Ensures cryptographic keys (like Salt's) are truly unique.
+if [ -f /var/lib/systemd/random-seed ]; then
+    log_info "Refreshing systemd random seed..."
+    rm -f /var/lib/systemd/random-seed
+    # We don't restart the service immediately to avoid delays, just clear the file.
 fi
-# --- END: Universal Clone Cleanup ---
+
+# --- 4. RHEL/CentOS/Oracle Specific: Subscription Manager ---
+# If a RHEL clone thinks it's registered to Red Hat, it can cause package conflict issues.
+if [ -d /etc/pki/consumer ]; then
+    log_info "Detected RHEL identity. Cleaning Subscription Manager..."
+    rm -rf /etc/pki/consumer/*
+    rm -f /etc/pki/product/*
+    rm -rf /etc/sysconfig/rhn/systemid
+    log_info "RHEL identity cleaned."
+fi
+
+# --- 5. SSH Host Key Regeneration (Security Critical) ---
+# Clones share SSH host keys by default, allowing MITM attacks.
+# We remove them and regenerate them immediately without breaking the active session.
+log_info "Regenerating SSH Host Keys..."
+rm -f /etc/ssh/ssh_host_*
+
+# Generate new keys without restarting sshd immediately (keeps your connection alive)
+if command -v ssh-keygen >/dev/null 2>&1; then
+    ssh-keygen -A
+    log_info "New SSH host keys generated."
+else
+    log_warn "ssh-keygen not found. Keys will be generated on next reboot."
+fi
+
+# --- 6. Machine ID Regeneration (Universal) ---
+log_info "Regenerating System Machine ID..."
+rm -f /etc/machine-id
+rm -f /var/lib/dbus/machine-id
+
+if command -v dbus-uuidgen >/dev/null 2>&1; then
+    dbus-uuidgen --ensure
+fi
+
+systemd-machine-id-setup
+
+# Fix for Debian/Ubuntu where dbus ID might not sync automatically
+if [ ! -s /var/lib/dbus/machine-id ] && [ -s /etc/machine-id ]; then
+    mkdir -p /var/lib/dbus
+    ln -s /etc/machine-id /var/lib/dbus/machine-id
+    log_info "Synced /etc/machine-id to /var/lib/dbus/machine-id"
+fi
+
+# --- 7. Salt Identity Cleanup (SUMA 5.0 Specific) ---
+# This is the most important part for your SUSE Manager registration.
+log_info "Cleaning Salt Bundle (venv) identity..."
+rm -f /etc/venv-salt-minion/minion_id
+rm -rf /etc/venv-salt-minion/pki/*
+
+log_info "Cleaning Legacy Salt identity..."
+rm -f /etc/salt/minion_id
+rm -rf /etc/salt/pki/*
+
+# --- 8. Journald Rotation ---
+# Prevents log corruption after ID change.
+if [ -d /var/log/journal ]; then
+    log_info "Rotating systemd journal..."
+    mv /var/log/journal /var/log/journal.backup_$(date +%s)
+    mkdir -p /var/log/journal
+    systemd-tmpfiles --create --prefix /var/log/journal 2>/dev/null || true
+    # We restart journald to lock in the new machine-id
+    systemctl restart systemd-journald
+fi
+
+log_info "Cleanup Complete. New Machine ID: $(cat /etc/machine-id)"
+# --- END: Advanced Clone Cleanup ---
