@@ -1,6 +1,6 @@
 #!/bin/bash
 # --- START: Universal Clone Cleanup (SLES/RHEL/Debian/Ubuntu) ---
-echo "INFO: Starting Clone Cleanup for SUSE Manager 5.0 Registration..."
+echo "INFO: Starting Clone Cleanup for SUSE Manager / Multi-Linux Manager Registration..."
 
 # 0. Safety Check: Ensure we are running on a systemd system
 if [ ! -d /run/systemd/system ]; then
