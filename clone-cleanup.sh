@@ -1,5 +1,4 @@
-# --- START: Advanced Clone Cleanup & Prep ---
-# Merges SUSE Manager 5.0 requirements with best-practice clone hygiene
+# --- START: Clone Cleanup & Prep for SUSE Manager / Multi-Linux Manager client machines---
 
 # --- 1. Visual Helpers ---
 RED='\033[0;31m'
@@ -43,7 +42,7 @@ fi
 log_info "Regenerating SSH Host Keys..."
 rm -f /etc/ssh/ssh_host_*
 
-# Generate new keys without restarting sshd immediately (keeps your connection alive)
+# Generate new keys without restarting sshd immediately (keeps connection alive)
 if command -v ssh-keygen >/dev/null 2>&1; then
     ssh-keygen -A
     log_info "New SSH host keys generated."
@@ -69,12 +68,15 @@ if [ ! -s /var/lib/dbus/machine-id ] && [ -s /etc/machine-id ]; then
     log_info "Synced /etc/machine-id to /var/lib/dbus/machine-id"
 fi
 
-# --- 7. Salt Identity Cleanup (SUMA 5.0 Specific) ---
-# This is the most important part for your SUSE Manager registration.
+# --- 7. Salt Identity Cleanup ---
 log_info "Cleaning Salt Bundle (venv) identity..."
 rm -f /etc/venv-salt-minion/minion_id
 rm -rf /etc/venv-salt-minion/pki/*
 
+# Stale data in cache can cause odd behavior, best to remove it as well
+rm -rf /var/cache/venv-salt-minion/*
+
+# Removing legacy Salt just in case
 log_info "Cleaning Legacy Salt identity..."
 rm -f /etc/salt/minion_id
 rm -rf /etc/salt/pki/*
