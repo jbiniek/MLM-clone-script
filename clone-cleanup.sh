@@ -13,7 +13,7 @@ dbus-uuidgen --ensure
 systemd-machine-id-setup
 
 # 3. Clean up Salt Bundle Identity (SUSE Manager 5.0+ default)
-# This is CRITICAL for SUMA 5.0. If you miss this, the server sees them as the same minion.
+# The server will see systems as the same minion unless this is cleaned
 rm -f /etc/venv-salt-minion/minion_id
 rm -rf /etc/venv-salt-minion/pki/*
 
